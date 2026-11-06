@@ -358,6 +358,7 @@ class GenerateSchema:
         'field_name_stack',
         'model_type_stack',
         'defs',
+        '_typed_dict_configs',
     )
 
     def __init__(
@@ -373,6 +374,7 @@ class GenerateSchema:
         self.field_name_stack = _FieldNameStack()
         self.model_type_stack = _ModelTypeStack()
         self.defs = _Definitions()
+        self._typed_dict_configs: dict[tuple[type, type | None], list[dict[str, Any]]] = {}
 
     # The handler lambdas take the `GenerateSchema` instance as their first argument, so that
     # the dicts can be built once at class creation time and shared by all instances:
@@ -1421,7 +1423,34 @@ class GenerateSchema:
         """
         FieldInfo = import_cached_field_info()
 
+        try:
+            # if a typed dictionary class doesn't have config, we use the parent's config, hence a default of `None`
+            # see https://github.com/pydantic/pydantic/issues/10917
+            config: ConfigDict | None = get_attribute_from_bases(typed_dict_cls, '__pydantic_config__')
+        except AttributeError:
+            config = None
+
         typed_dict_ref = _type_refs.class_type_ref(typed_dict_cls, origin)
+        if config is None:
+            key = (typed_dict_cls, origin)
+            configs = self._typed_dict_configs.setdefault(key, [])
+            curr_cfg = self._config_wrapper.config_dict
+            idx = None
+            for i, c in enumerate(configs):
+                try:
+                    if c == curr_cfg:
+                        idx = i
+                        break
+                except (ValueError, TypeError):
+                    if c is curr_cfg:
+                        idx = i
+                        break
+            if idx is None:
+                idx = len(configs)
+                configs.append(curr_cfg)
+            if idx > 0:
+                typed_dict_ref = f'{typed_dict_ref}_{idx}'
+
         with (
             self.model_type_stack.push(typed_dict_cls),
             self.defs.get_definition_ref_schema(ref=typed_dict_ref) as maybe_schema,
@@ -1438,13 +1467,6 @@ class GenerateSchema:
                     'Please use `typing_extensions.TypedDict` instead of `typing.TypedDict` on Python < 3.12.',
                     code='typed-dict-version',
                 )
-
-            try:
-                # if a typed dictionary class doesn't have config, we use the parent's config, hence a default of `None`
-                # see https://github.com/pydantic/pydantic/issues/10917
-                config: ConfigDict | None = get_attribute_from_bases(typed_dict_cls, '__pydantic_config__')
-            except AttributeError:
-                config = None
 
             with self._config_wrapper_stack.push(config):
                 core_config = self._config_wrapper.core_config(title=typed_dict_cls.__name__)

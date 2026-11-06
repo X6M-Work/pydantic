@@ -1241,3 +1241,38 @@ def test_typeddict_validate_json_error_loc() -> None:
             'input': 'wrong',
         }
     ]
+
+
+def test_nested_typeddict_different_parent_configs() -> None:
+    class Item(TypedDict):
+        name: str
+
+    class Permissive(TypedDict):
+        __pydantic_config__ = ConfigDict(extra='allow')
+        item: Item
+
+    class Restrictive(TypedDict):
+        __pydantic_config__ = ConfigDict(extra='ignore')
+        item: Item
+
+    class Root(TypedDict):
+        permissive: Permissive
+        restrictive: Restrictive
+
+    class ReversedRoot(TypedDict):
+        restrictive: Restrictive
+        permissive: Permissive
+
+    data = {'item': {'name': 'abcd', 'extra': 1}}
+    root_input = {'permissive': data, 'restrictive': data}
+
+    expected_output = {
+        'permissive': {'item': {'name': 'abcd', 'extra': 1}},
+        'restrictive': {'item': {'name': 'abcd'}},
+    }
+
+    assert TypeAdapter(Root).validate_python(root_input) == expected_output
+    assert TypeAdapter(ReversedRoot).validate_python(root_input) == {
+        'restrictive': {'item': {'name': 'abcd'}},
+        'permissive': {'item': {'name': 'abcd', 'extra': 1}},
+    }
